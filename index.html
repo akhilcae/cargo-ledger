@@ -108,6 +108,15 @@
   .badge.low{background:var(--red-soft); color:var(--red);}
   .badge.ok{background:var(--green-soft); color:var(--green);}
 
+  /* Size dropdown inside table */
+  .size-select{
+    padding:5px 8px; border:1px solid var(--line); border-radius:6px; font-size:12.5px;
+    font-family:'JetBrains Mono',monospace; background:#FBFAF8; color:var(--ink); cursor:pointer;
+  }
+  .size-select:focus{outline:none; border-color:var(--amber);}
+  .filter-bar{display:flex; align-items:center; gap:8px; margin-bottom:14px;}
+  .filter-bar label{font-size:12px; font-weight:600; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.3px;}
+
   .empty{
     text-align:center; padding:50px 20px; color:var(--ink-soft);
   }
@@ -187,6 +196,9 @@
 <div class="toast" id="toast"></div>
 
 <script>
+/* ---------- Sizes (edit this list to add/remove sizes) ---------- */
+const SIZES = ['Big','Medium','Small','+2 cm','+1.5 cm','+1 cm','-1 cm','Trim'];
+
 /* ---------- Icons ---------- */
 const ICONS = {
   dashboard:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>`,
@@ -203,6 +215,7 @@ let currentTab = 'dashboard';
 let poSubtab = 'open';
 let soSubtab = 'open';
 let editingLines = [];
+let sizeFilter = 'all';
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
 const fmt = (n) => (Math.round((n+Number.EPSILON)*100)/100).toLocaleString();
@@ -211,6 +224,17 @@ const today = () => new Date().toISOString().slice(0,10);
 function log(text){
   state.activity.unshift({ date:new Date().toISOString(), text });
   state.activity = state.activity.slice(0,40);
+}
+
+/* Make sure old saved products have a size field */
+function migrate(){
+  state.products.forEach(p => { if(p.size === undefined) p.size = ''; });
+}
+
+/* Size dropdown options. blank = no size set */
+function sizeOptions(selected){
+  return `<option value="" ${!selected?'selected':''}>— none —</option>` +
+    SIZES.map(s => `<option value="${s}" ${s===selected?'selected':''}>${s}</option>`).join('');
 }
 
 /* ---------- Storage ---------- */
@@ -227,6 +251,7 @@ async function loadState(){
   }catch(e){
     seedDemo();
   }
+  migrate();
   render();
 }
 
@@ -263,6 +288,7 @@ function importBackup(input){
     try{
       const parsed = JSON.parse(e.target.result);
       state = Object.assign({products:[],partners:[],purchaseOrders:[],salesOrders:[],activity:[]}, parsed);
+      migrate();
       await saveState();
       render();
       showToast('Backup restored');
@@ -277,8 +303,8 @@ function importBackup(input){
 function seedDemo(){
   const p1 = uid(), p2 = uid(), s1 = uid(), c1 = uid();
   state.products = [
-    { id:p1, sku:'SKU-001', name:'Sample Product A', unit:'kg', stock:42, reorder:20 },
-    { id:p2, sku:'SKU-002', name:'Sample Product B', unit:'pcs', stock:8, reorder:15 },
+    { id:p1, sku:'SKU-001', name:'Sample Product A', unit:'kg', size:'Big', stock:42, reorder:20 },
+    { id:p2, sku:'SKU-002', name:'Sample Product B', unit:'pcs', size:'Small', stock:8, reorder:15 },
   ];
   state.partners = [
     { id:s1, name:'Sample Supplier Ltd.', type:'supplier' },
@@ -336,6 +362,16 @@ function viewDashboard(){
   const openIn = state.purchaseOrders.filter(o=>o.status==='open').length;
   const openOut = state.salesOrders.filter(o=>o.status==='open').length;
 
+  // Stock totals per size
+  const sizeRows = SIZES.map(s => {
+    const items = state.products.filter(p => p.size === s);
+    return { size:s, count:items.length, stock:items.reduce((a,p)=>a+p.stock,0) };
+  });
+  const unsized = state.products.filter(p => !p.size || !SIZES.includes(p.size));
+  if(unsized.length){
+    sizeRows.push({ size:'No size', count:unsized.length, stock:unsized.reduce((a,p)=>a+p.stock,0) });
+  }
+
   return `
     <div class="page-head">
       <div><div class="page-eyebrow">Overview</div><h1 class="page-title">Dashboard</h1></div>
@@ -349,8 +385,8 @@ function viewDashboard(){
     <div class="grid cols-2">
       <div class="card">
         <div class="panel-title">Low Stock Alerts</div>
-        ${lowStock.length ? `<table><thead><tr><th>Product</th><th>Stock</th><th>Reorder At</th></tr></thead><tbody>
-          ${lowStock.map(p=>`<tr><td>${p.name}</td><td class="mono">${fmt(p.stock)} ${p.unit}</td><td class="mono">${fmt(p.reorder)}</td></tr>`).join('')}
+        ${lowStock.length ? `<table><thead><tr><th>Product</th><th>Size</th><th>Stock</th><th>Reorder At</th></tr></thead><tbody>
+          ${lowStock.map(p=>`<tr><td>${p.name}</td><td class="mono">${p.size||'—'}</td><td class="mono">${fmt(p.stock)} ${p.unit}</td><td class="mono">${fmt(p.reorder)}</td></tr>`).join('')}
         </tbody></table>` : `<div class="empty" style="padding:24px;">All stock levels are healthy.</div>`}
       </div>
       <div class="card">
@@ -362,25 +398,57 @@ function viewDashboard(){
           </div>`).join('')}</div>` : `<div class="empty" style="padding:24px;">No activity yet.</div>`}
       </div>
     </div>
+    <div class="card" style="margin-top:16px;">
+      <div class="panel-title">Stock by Size</div>
+      <table>
+        <thead><tr><th>Size</th><th>Products</th><th>Total Stock</th></tr></thead>
+        <tbody>
+          ${sizeRows.map(r=>`<tr>
+            <td class="mono">${r.size}</td>
+            <td class="mono">${r.count}</td>
+            <td class="mono">${fmt(r.stock)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
   `;
 }
 
 /* ---------- Inventory ---------- */
 function viewInventory(){
+  const list = state.products.filter(p => {
+    if(sizeFilter==='all') return true;
+    if(sizeFilter==='none') return !p.size;
+    return p.size === sizeFilter;
+  });
+
   return `
     <div class="page-head">
       <div><div class="page-eyebrow">Stock Control</div><h1 class="page-title">Inventory</h1></div>
       <button class="btn amber" onclick="openProductModal()">${ICONS.plus} Add Product</button>
     </div>
+    <div class="filter-bar">
+      <label>Filter by size</label>
+      <select class="size-select" onchange="setSizeFilter(this.value)">
+        <option value="all" ${sizeFilter==='all'?'selected':''}>All sizes</option>
+        ${SIZES.map(s=>`<option value="${s}" ${sizeFilter===s?'selected':''}>${s}</option>`).join('')}
+        <option value="none" ${sizeFilter==='none'?'selected':''}>No size</option>
+      </select>
+    </div>
     <div class="card">
-      ${state.products.length ? `
+      ${list.length ? `
       <table>
-        <thead><tr><th>SKU</th><th>Product</th><th>Unit</th><th>Stock</th><th>Reorder Level</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>SKU</th><th>Product</th><th>Size</th><th>Unit</th><th>Stock</th><th>Reorder Level</th><th>Status</th><th></th></tr></thead>
         <tbody>
-          ${state.products.map(p=>`
+          ${list.map(p=>`
             <tr>
               <td><span class="sku">${p.sku}</span></td>
               <td>${p.name}</td>
+              <td>
+                <select class="size-select" onchange="setProductSize('${p.id}', this.value)">
+                  ${sizeOptions(p.size)}
+                </select>
+              </td>
               <td class="mono">${p.unit}</td>
               <td class="mono">${fmt(p.stock)}</td>
               <td class="mono">${fmt(p.reorder)}</td>
@@ -391,9 +459,23 @@ function viewInventory(){
               </td>
             </tr>`).join('')}
         </tbody>
-      </table>` : `<div class="empty"><div class="stamp">No products yet</div><div>Add your first product to start tracking stock.</div></div>`}
+      </table>` : (state.products.length
+        ? `<div class="empty"><div class="stamp">No products in this size</div><div>Change the size filter to see other products.</div></div>`
+        : `<div class="empty"><div class="stamp">No products yet</div><div>Add your first product to start tracking stock.</div></div>`)}
     </div>
   `;
+}
+
+function setSizeFilter(v){ sizeFilter = v; render(); }
+
+async function setProductSize(id, size){
+  const p = state.products.find(x=>x.id===id);
+  if(!p) return;
+  p.size = size;
+  log(`Size of ${p.sku} set to ${size || 'none'}`);
+  await saveState();
+  render();
+  showToast('Size updated');
 }
 
 function openProductModal(id){
@@ -403,6 +485,7 @@ function openProductModal(id){
     <div class="modal-body">
       <div class="field"><label>SKU</label><input id="f-sku" value="${p?p.sku:''}" placeholder="e.g. SKU-003"></div>
       <div class="field"><label>Product Name</label><input id="f-name" value="${p?p.name:''}" placeholder="e.g. Blue Widget"></div>
+      <div class="field"><label>Size</label><select id="f-size">${sizeOptions(p?p.size:'')}</select></div>
       <div class="field"><label>Unit</label><input id="f-unit" value="${p?p.unit:'pcs'}" placeholder="kg, pcs, box..."></div>
       <div class="field"><label>Current Stock</label><input id="f-stock" type="number" step="0.01" value="${p?p.stock:0}"></div>
       <div class="field"><label>Reorder Level</label><input id="f-reorder" type="number" step="0.01" value="${p?p.reorder:0}"></div>
@@ -418,6 +501,7 @@ function openProductModal(id){
 async function saveProduct(id){
   const sku = document.getElementById('f-sku').value.trim();
   const name = document.getElementById('f-name').value.trim();
+  const size = document.getElementById('f-size').value;
   const unit = document.getElementById('f-unit').value.trim() || 'pcs';
   const stock = parseFloat(document.getElementById('f-stock').value) || 0;
   const reorder = parseFloat(document.getElementById('f-reorder').value) || 0;
@@ -425,10 +509,10 @@ async function saveProduct(id){
 
   if(id){
     const p = state.products.find(x=>x.id===id);
-    Object.assign(p, {sku,name,unit,stock,reorder});
+    Object.assign(p, {sku,name,size,unit,stock,reorder});
     log(`Updated product ${sku}`);
   } else {
-    state.products.push({ id:uid(), sku, name, unit, stock, reorder });
+    state.products.push({ id:uid(), sku, name, size, unit, stock, reorder });
     log(`Added product ${sku}`);
   }
   await saveState();
@@ -611,7 +695,7 @@ function renderLines(){
     <div class="line-item-row">
       <div class="field">
         <select onchange="editingLines[${i}].productId=this.value">
-          ${state.products.map(p=>`<option value="${p.id}" ${p.id===l.productId?'selected':''}>${p.name} (${p.sku})</option>`).join('')}
+          ${state.products.map(p=>`<option value="${p.id}" ${p.id===l.productId?'selected':''}>${p.name}${p.size?' · '+p.size:''} (${p.sku})</option>`).join('')}
         </select>
       </div>
       <div class="field" style="max-width:90px;">
